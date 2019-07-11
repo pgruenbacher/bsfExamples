@@ -89,7 +89,8 @@ namespace bs
 			velocity = direction * mCurrentSpeed;
 
 		// Note: Gravity is acceleration, but since the walker doesn't support falling, just apply it as a velocity
-		Vector3 gravity = gPhysics().getGravity();
+		// Vector3 gravity = gPhysics().getGravity();
+		Vector3 gravity = Vector3(0, -9.81f, 0);
 		mController->move((velocity + gravity) * frameDelta);
 	}
 }

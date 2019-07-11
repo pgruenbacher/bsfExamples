@@ -10,6 +10,9 @@
 #include "RenderAPI/BsRenderAPI.h"
 #include "RenderAPI/BsRenderWindow.h"
 #include "Scene/BsSceneObject.h"
+#include "CoreThread/BsCoreThread.h"
+#include "RenderAPI/BsVertexDataDesc.h"
+#include "RenderAPI/BsVertexData.h"
 
 // Example includes
 #include "BsCameraFlyer.h"
@@ -26,8 +29,14 @@
 // component. The animation component start playing the animation clip we imported earlier. Finally it sets up a camera,
 // along with CameraFlyer component that allows the user to fly around the scene.
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// namespace bs {
+// 	namespace ct {
+
 namespace bs
 {
+	SPtr<ct::VertexBuffer> gInstanceBuffer;
+	UINT32 gNumInstances = 1000;
+
 	UINT32 windowResWidth = 1280;
 	UINT32 windowResHeight = 720;
 
@@ -44,6 +53,192 @@ namespace bs
 		HMaterial exampleMaterial;
 	};
 
+	template<typename TCurveVector>
+	void calcTimeRange(float& min, float& max, const TCurveVector& curves) {
+		for (const auto& curve : curves) {
+			std::pair<float, float> range = curve.curve.getTimeRange();
+			min = std::min(min, range.first);
+			max = std::max(max, range.second);
+		}
+
+	}
+
+	std::pair<float, float> getTimeRange(SPtr<AnimationCurves> curves) {
+		float start{100}, end{-100};
+		calcTimeRange(start, end, curves->position);
+		calcTimeRange(start, end, curves->rotation);
+		calcTimeRange(start, end, curves->scale);
+		calcTimeRange(start, end, curves->generic);
+		return {start, end};
+	}
+
+
+	struct Data {
+		Vector3 position;
+		uint frame;
+		uint frame1;
+		uint frame2;
+		uint frame3;
+	};
+
+	void updateInstancing(UINT32 frame) {
+
+		Data data[gNumInstances];
+		for (UINT32 i = 0; i < gNumInstances; ++i) {
+			data[i].position = Vector3(i % 100, 0, i / 100);
+			UINT32 frameOffset = (frame + i * 7) / 40;
+			data[i].frame = (i + frameOffset) % 15;
+			if (i == 0) {
+				std::cout << "FRAME? " << data[i].frame << std::endl;
+			}
+		}
+		gInstanceBuffer->writeData(0, sizeof(data), data, BWT_NORMAL);
+	}
+
+	void setupInstancing(Assets& assets) {
+
+		auto mesh = assets.exampleModel->getCore();
+		SPtr<ct::VertexData> vertexData = mesh->getVertexData();
+
+		SPtr<VertexDataDesc> vertexDesc = VertexDataDesc::create();
+		*vertexDesc = *mesh->getVertexDesc();
+		vertexDesc->addVertElem(
+			 VET_FLOAT3, // Each entry in the instance vertex buffer is a 3D float
+			 VES_POSITION, // We map it to the position semantic as vertex shader input
+			 1, // We use the semantic index 1, as 0th index is taken by per-vertex VES_POSITION semantic
+			 1, // We use the second bound vertex buffer for instance data
+			 1  // Instance step rate of 1 means the new element will be fetched from the vertex buffer for each drawn instance
+		 );
+		vertexDesc->addVertElem(
+			 VET_UINT4, // Each entry in the instance vertex buffer is a 3D float
+			 VES_COLOR, // We map it to the position semantic as vertex shader input
+			 1, // We use the semantic index 1, as 0th index is taken by per-vertex VES_POSITION semantic
+			 1, // We use the second bound vertex buffer for instance data
+			 1  // Instance step rate of 1 means the new element will be fetched from the vertex buffer for each drawn instance
+		 );
+
+		auto decl = ct::VertexDeclaration::create(vertexDesc);
+
+		VERTEX_BUFFER_DESC vbDesc;
+		vbDesc.vertexSize = decl->getProperties().getVertexSize(1);
+		vbDesc.numVerts = gNumInstances;
+		vbDesc.usage = GBU_STATIC;
+
+		gInstanceBuffer = ct::VertexBuffer::create(vbDesc);
+
+
+		Data data[gNumInstances];
+		for (UINT32 i = 0; i < gNumInstances; ++i) {
+			data[i].position = Vector3(i % 100, 0, i / 100);
+			data[i].frame = i % 15;
+		}
+		assert(sizeof(Data) == vbDesc.vertexSize);
+		gInstanceBuffer->writeData(0, sizeof(data), data, BWT_NORMAL);
+
+		vertexData->vertexDeclaration = decl;
+		vertexData->setBuffer(vertexData->getMaxBufferIndex() + 1, gInstanceBuffer);
+
+	}
+
+	void setBoneTransform(Color* colors, Matrix4& transform) {
+		auto basis = transform.get3x3();
+		// Vector3 position(transform[0][3], transform[1][3], transform[2][3]);
+		colors[0][0] = transform[0][0] / 255.f;
+		colors[0][1] = transform[0][1] / 255.f;
+		colors[0][2] = transform[0][2] / 255.f;
+		colors[0][3] = transform[0][3] / 255.f;
+		colors[1][0] = transform[1][0] / 255.f;
+		colors[1][1] = transform[1][1] / 255.f;
+		colors[1][2] = transform[1][2] / 255.f;
+		colors[1][3] = transform[1][3] / 255.f;
+		colors[2][0] = transform[2][0] / 255.f;
+		colors[2][1] = transform[2][1] / 255.f;
+		colors[2][2] = transform[2][2] / 255.f;
+		colors[2][3] = transform[2][3] / 255.f;
+
+		assert(transform[3][0] == 0.f);
+		assert(transform[3][1] == 0.f);
+		assert(transform[3][2] == 0.f);
+		assert(transform[3][3] == 1.f);
+		// colors[0][0] = basis[0][0];
+		// colors[0][1] = basis[0][1];
+		// colors[0][2] = basis[0][2];
+		// colors[0][3] = position.x;
+		// colors[1][0] = basis[1][0];
+		// colors[1][1] = basis[1][1];
+		// colors[1][2] = basis[1][2];
+		// colors[1][3] = position.y;
+		// colors[2][0] = basis[2][0];
+		// colors[2][1] = basis[2][1];
+		// colors[2][2] = basis[2][2];
+		// colors[2][3] = position.z;
+
+		// std::cout << "COL " << colors[0].r << " " << colors[1].g << " " << colors[1].b << std::endl;
+		// std::cout << "COL " << colors[1].r << " " << colors[1].g << " " << colors[1].b << std::endl;
+		// std::cout << "COL " << colors[2].r << " " << colors[2].g << " " << colors[2].b << std::endl;
+	}
+
+	HTexture getSkeletonBoneTransforms(SPtr<Skeleton> skel, HAnimationClip clip) {
+
+		UINT32 curBoneIdx = 0;
+		UINT32 numBones = skel->getNumBones();
+		Vector<Matrix4> transforms(numBones);
+
+		LocalSkeletonPose localPose(numBones);
+		// Copy transforms from mapped scene objects
+		UINT32 boneTfrmIdx = 0;
+
+		std::pair<float, float> range = getTimeRange(clip->getCurves());
+		float start = range.first;
+		float end = range.second;
+		UINT32 frames = (end - start) / 0.1f;
+		assert(frames > 1);
+		// UINT32 frames = 1;
+		// 3 pixels per bone transform.
+		UINT32 width = numBones * 3;
+		UINT32 height = frames;
+		Vector<Color> colors(width * height);
+
+		SkeletonMask mask(numBones);
+		bool loop = true;
+		float time = 0.f;
+		// Animate bones
+		// UINT32 frame = 0;
+		std::cout << "NUMB BONES " << numBones << std::endl;
+		std::cout << " NUM FRAMES " << frames <<  std::endl;
+		for (UINT32 frame = 0; frame < frames; ++frame) {
+			// have to set hasOverride to false all manually.
+			memset(localPose.hasOverride, 0, sizeof(bool) * localPose.numBones);
+			float time = start + 0.1f * frame;
+			skel->getPose(transforms.data(), localPose, mask, *clip, time, loop);
+
+			for (UINT32 i = 0; i < transforms.size(); ++i) {
+				// transforms[i] = Matrix4::TRS(localPose.positions[i], localPose.rotations[i], localPose.scales[i]);
+
+				// Vector3 trans, scale;
+				// Quaternion rot;
+				// transforms[i].decomposition(trans, rot, scale);
+				// Radian x, y, z;
+				// rot.toEulerAngles(x,y,z);
+				// std::cout << "TRANSFORM ROT ? " << i << " " << x.valueDegrees() << " " << y.valueDegrees() << " " << z.valueDegrees() << std::endl;
+
+				assert(transforms[i].isAffine());
+
+				UINT32 offset = i * 3;
+				offset += width * frame;
+				setBoneTransform(&colors[offset], transforms[i]);
+				// std::cout << "OFFSET " << offset << " " << width << std::endl;
+			}
+		}
+
+		UINT32 depth = 1;
+		auto pixelData = PixelData::create(width, height, depth, PF_RGBA32F);
+		pixelData->setColors(colors);
+
+		HTexture texture = Texture::create(pixelData);
+		return texture;
+	}
+
 	/** Load the resources we'll be using throughout the example. */
 	Assets loadAssets()
 	{
@@ -53,23 +248,26 @@ namespace bs
 
 		// Set up a path to the model resource
 		const Path exampleDataPath = EXAMPLE_DATA_PATH;
-		const Path modelPath = exampleDataPath + "MechDrone/Drone.FBX";
+		const Path modelPath = exampleDataPath + "MechDrone/BaseMesh_Anim.fbx";
 
 		// Set up mesh import options so that we import information about the skeleton and the skin, as well as any
 		// animation clips the model might have.
 		SPtr<MeshImportOptions> meshImportOptions = MeshImportOptions::create();
-		meshImportOptions->setImportSkin(true);
-		meshImportOptions->setImportAnimation(true);
+		meshImportOptions->importSkin = (true);
+		meshImportOptions->importAnimation = (true);
 
 		// The FBX file contains multiple resources (a mesh and an animation clip), therefore we use importAll() method,
 		// which imports all resources in a file.
-		Vector<SubResource> modelResources = gImporter().importAll(modelPath, meshImportOptions);
-		for(auto& entry : modelResources)
+		SPtr<MultiResource> modelResources = gImporter().importAll(modelPath, meshImportOptions);
+		for(auto& entry : modelResources->entries)
 		{
-			if(rtti_is_of_type<Mesh>(entry.value.get()))
+			if(rtti_is_of_type<Mesh>(entry.value.get())) {
 				assets.exampleModel = static_resource_cast<Mesh>(entry.value);
-			else if(rtti_is_of_type<AnimationClip>(entry.value.get()))
+			}
+			else if(rtti_is_of_type<AnimationClip>(entry.value.get())) {
 				assets.exampleAnimClip = static_resource_cast<AnimationClip>(entry.value);
+				std::cout << assets.exampleAnimClip->getName() << std::endl;			
+			}
 		}
 
 		// Load PBR textures for the 3D model
@@ -79,7 +277,8 @@ namespace bs
 		assets.exampleMetalnessTex = ExampleFramework::loadTexture(ExampleTexture::DroneMetalness, false);
 
 		// Create a material using the default physically based shader, and apply the PBR textures we just loaded
-		HShader shader = gBuiltinResources().getBuiltinShader(BuiltinShader::Standard);
+		// HShaderv shader = gBuiltinResources().getBuiltinShader(BuiltinShader::Standard);
+		HShader shader = gImporter().import<Shader>(Path("/home/pgruenbacher/build/bsframework/bsfExamples/Build/Diffuse.bsl"));
 		assets.exampleMaterial = Material::create(shader);
 
 		assets.exampleMaterial->setTexture("gAlbedoTex", assets.exampleAlbedoTex);
@@ -122,6 +321,9 @@ namespace bs
 		// Start playing the animation clip we imported
 		animation->play(assets.exampleAnimClip);
 
+  		// gCoreThread().queueCommand(std::bind(getSkeletonBoneTransforms, assets.exampleModel->getSkeleton(), assets.exampleAnimClip));
+  		HTexture texture = getSkeletonBoneTransforms(assets.exampleModel->getSkeleton(), assets.exampleAnimClip);
+		assets.exampleMaterial->setTexture("gAnimationTex", texture);
 		/************************************************************************/
 		/* 									SKYBOX                       		*/
 		/************************************************************************/
@@ -173,7 +375,21 @@ namespace bs
 		sceneCameraSO->setPosition(Vector3(0.0f, 2.5f, -4.0f) * 0.65f);
 		sceneCameraSO->lookAt(Vector3(0, 1.5f, 0));
 	}
-}
+
+	class AnimApplication : public Application {
+		UINT32 mFrame{0};
+	public:
+		AnimApplication(START_UP_DESC d) : Application(d) {}
+
+		void preUpdate() override {
+			Application::preUpdate();
+			++mFrame;
+			gCoreThread().queueCommand(std::bind(updateInstancing, mFrame));
+		}
+	};
+} // namespace bs
+
+
 
 /** Main entry point into the application. */
 #if BS_PLATFORM == BS_PLATFORM_WIN32
@@ -193,7 +409,7 @@ int main()
 
 	// Initializes the application and creates a window with the specified properties
 	VideoMode videoMode(windowResWidth, windowResHeight);
-	Application::startUp(videoMode, "Example", false);
+	Application::startUp<AnimApplication>(videoMode, "Example", false);
 
 	// Registers a default set of input controls
 	ExampleFramework::setupInputConfig();
@@ -201,6 +417,7 @@ int main()
 	// Load a model and textures, create materials
 	Assets assets = loadAssets();
 
+	gCoreThread().queueCommand(std::bind(setupInstancing, assets));
 	// Set up the scene with an object to render and a camera
 	setUp3DScene(assets);
 	
@@ -208,8 +425,10 @@ int main()
 	// window or exits in some other way.
 	Application::instance().runMainLoop();
 
+	gInstanceBuffer.reset();
 	// When done, clean up
 	Application::shutDown();
+
 
 	return 0;
 }

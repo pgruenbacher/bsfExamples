@@ -211,7 +211,7 @@ namespace bs
 		charController->setRadius(0.4f);
 
 		// FPS walker uses default input controls to move the character controller attached to the same object
-		characterSO->addComponent<FPSWalker>();
+		// characterSO->addComponent<FPSWalker>();
 
 		/************************************************************************/
 		/* 									CAMERA	                     		*/

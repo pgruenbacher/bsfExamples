@@ -85,7 +85,7 @@ namespace bs
 		button->onClick.connect([]()
 		{
 			// Log a message when the user clicks the button
-			LOGDBG("Button clicked!");
+			BS_LOG(Verbose, Uncategorized, "Button clicked!");
 		});
 
 		button->setPosition(10, 50);
@@ -98,11 +98,11 @@ namespace bs
 			// Log a message when the user toggles the button
 			if(enabled)
 			{
-				LOGDBG("Toggle turned on");
+				BS_LOG(Verbose, Uncategorized, "Toggle turned on");
 			}
 			else
 			{
-				LOGDBG("Toggle turned off");
+				BS_LOG(Verbose, Uncategorized, "Toggle turned off");
 			}
 		});
 
@@ -117,7 +117,7 @@ namespace bs
 		inputBox->onValueChanged.connect([](const String& value)
 		{
 			// Log a message when the user enters new text in the input box
-			LOGDBG("User entered: \"" + value + "\"");
+			BS_LOG(Verbose, Uncategorized, "User entered: \"" + value + "\"");
 		});
 
 		inputBox->setText("Type in me...");
@@ -137,7 +137,7 @@ namespace bs
 		listBox->onSelectionToggled.connect([listBoxElements](UINT32 idx, bool enabled)
 		{
 			// Log a message when the user selects a new element
-			LOGDBG("User selected element: \"" + listBoxElements[idx].getValue() + "\"");
+			BS_LOG(Verbose, Uncategorized, "User selected element: \"" + listBoxElements[idx].getValue() + "\"");
 			
 		});
 
