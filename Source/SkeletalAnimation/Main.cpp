@@ -44,7 +44,7 @@ namespace bs
 	struct Assets
 	{
 		HMesh exampleModel;
-		HAnimationClip exampleAnimClip;
+		Vector<HAnimationClip> exampleAnimClips;
 		HTexture exampleAlbedoTex;
 		HTexture exampleNormalsTex;
 		HTexture exampleRoughnessTex;
@@ -83,10 +83,96 @@ namespace bs
 		float frame3;
 	};
 
+	struct SkelAnim {
+	  UINT32 numFrames;
+	  UINT32 startFrame;
+	  bool loop;
+	  // String name;
+	  HAnimationClip clip;
+	};
 
-	void setupInstancing(Assets& assets) {
+	struct InstanceState {
+	  bool playing{false};
+	  float playStart{0.f};
+	  size_t animClipIndex{0};
+	};
 
-		auto mesh = assets.exampleModel->getCore();
+
+	class SkelCacher : public Component {
+		InstanceState mStates[gNumInstances];
+		Data mData[gNumInstances];
+		Vector<SkelAnim> _collected_anims;
+	public:
+		SkelCacher(HSceneObject& parent);
+		UINT32 collectAnimations(const Vector<HAnimationClip>& clips);
+		void setupInstancing(HMesh mesh);
+		HTexture getSkeletonBoneTransforms(SPtr<Skeleton> skel, Vector<HAnimationClip> clips);
+		void update() override;
+		void updateInstancing(float time);
+	};
+
+
+	SkelCacher::SkelCacher(HSceneObject& parent) : Component(parent) {
+		HRenderable renderable = SO()->getComponent<CRenderable>();
+		HMesh mesh = renderable->getMesh();
+		gCoreThread().queueCommand(std::bind(&SkelCacher::setupInstancing, this, mesh));
+
+		for (UINT32 i = 0; i < gNumInstances; ++i) {
+			mData[i].position = Vector3(i % 100, 0, i / 100);
+			UINT32 frameOffset = (i * 7) / 40;
+			mData[i].frame = (frameOffset) % 14;
+		}
+
+		for (UINT32 i = 0; i < gNumInstances; ++i) {
+			auto& st = mStates[i];
+			st.playing = true;
+			st.playStart = ((i * 5) / 33) % 12;
+			st.animClipIndex = ((i * 4) / 9) % 3;
+		}
+	}
+
+	void SkelCacher::update() {
+		auto time = gTime().getFrameDelta();
+		gCoreThread().queueCommand(std::bind(&SkelCacher::updateInstancing, this, time));
+	}
+
+	void SkelCacher::updateInstancing(float time) {
+		std::cout << "SKEL CACHER OVERRIDE " << std::endl;
+
+		for (UINT32 i = 0; i < gNumInstances; ++i) {
+			mData[i].frame += time * FPS;
+			const auto& state = mStates[i];
+			const auto& anim = _collected_anims[state.animClipIndex];
+			if (mData[i].frame > ((anim.numFrames - 1) + anim.startFrame)) {
+				mData[i].frame = mData[i].frame - (anim.numFrames - 1);
+			}
+			// mData[i].frame = 15.f;
+			// if (i == 21) std::cout << "FRAME ? " << mData[i].frame << std::endl;
+		}
+		gInstanceBuffer->writeData(0, sizeof(mData), mData, BWT_NORMAL);
+	}
+
+	UINT32 SkelCacher::collectAnimations(const Vector<HAnimationClip>& clips) {
+	  UINT32 total_frames = 0;
+
+	  for (int i = 0; i < clips.size(); ++i) {
+	    const auto& clip = clips[i];
+	    UINT32 numFrames = clip->getLength() * FPS;
+	    bool hasLoop = true;
+	    if (hasLoop) numFrames += 1;
+	    // size_t hash = std::hash<String>{}(clip->getName());
+	    // assert that the clip has a name and thus produces a hash.
+	    // assert(hash != 0);
+	    _collected_anims.push_back({SkelAnim{numFrames, total_frames, hasLoop, clip}});
+	    total_frames += numFrames;
+	  }
+	  
+	  return total_frames;
+	}
+
+	void SkelCacher::setupInstancing(HMesh _mesh) {
+
+		auto mesh = _mesh->getCore();
 		SPtr<ct::VertexData> vertexData = mesh->getVertexData();
 
 		SPtr<VertexDataDesc> vertexDesc = VertexDataDesc::create();
@@ -151,7 +237,7 @@ namespace bs
 		assert(transform[3][3] == 1.f);
 	}
 
-	HTexture getSkeletonBoneTransforms(SPtr<Skeleton> skel, HAnimationClip clip) {
+	HTexture SkelCacher::getSkeletonBoneTransforms(SPtr<Skeleton> skel, Vector<HAnimationClip> clips) {
 
 		UINT32 curBoneIdx = 0;
 		UINT32 numBones = skel->getNumBones();
@@ -159,51 +245,49 @@ namespace bs
 
 		LocalSkeletonPose localPose(numBones);
 		// Copy transforms from mapped scene objects
-		UINT32 boneTfrmIdx = 0;
+		// UINT32 boneTfrmIdx = 0;
 
 		// std::pair<float, float> range = getTimeRange(clip->getCurves());
 		// float start = range.first;
 		// float end = range.second;
 		// UINT32 frames = (end - start) * FPS;
-		UINT32 frames = clip->getLength() * FPS;
-		assert(frames > 1);
-		// UINT32 frames = 1;
+		// UINT32 totalFrames = clip->getLength() * FPS;
+		UINT32 totalFrames = collectAnimations(clips);
+
+		assert(totalFrames > 1);
 		// 3 pixels per bone transform.
 		UINT32 width = numBones * 3;
-		UINT32 height = frames;
+		UINT32 height = totalFrames;
 		Vector<Color> colors(width * height);
 
 		SkeletonMask mask(numBones);
 		bool loop = true;
-		float time = 0.f;
-		// Animate bones
-		// UINT32 frame = 0;
-		std::cout << "NUMB BONES " << numBones << std::endl;
-		std::cout << " NUM FRAMES " << frames << " " << clip->getLength() << " " << clip->getSampleRate() <<  std::endl;
-		for (UINT32 frame = 0; frame < frames; ++frame) {
-			// have to set hasOverride to false all manually.
-			memset(localPose.hasOverride, 0, sizeof(bool) * localPose.numBones);
-			float time = frame / FPS;
-			skel->getPose(transforms.data(), localPose, mask, *clip, time, loop);
+		// std::cout << "WIDTH ? " << width << " " << totalFrames << std::endl;
+  		assert(_collected_anims.size() > 1);
+		for (const auto& anim : _collected_anims) {
+			// auto anim = iter.second;
+			float time = 0.f;
+			UINT32 frames = anim.numFrames;
+			auto clip = anim.clip;
+			// std::cout << "NUMB BONES " << numBones << std::endl;
+			// std::cout << " NUM FRAMES " << frames << " " << anim.clip->getName() << " " << anim.startFrame <<  std::endl;
+			for (UINT32 frame = 0; frame < frames; ++frame) {
+				// have to set hasOverride to false all manually.
+				memset(localPose.hasOverride, 0, sizeof(bool) * localPose.numBones);
+				float time = frame / FPS;
+				skel->getPose(transforms.data(), localPose, mask, *clip, time, loop);
 
-			for (UINT32 i = 0; i < transforms.size(); ++i) {
-				// transforms[i] = Matrix4::TRS(localPose.positions[i], localPose.rotations[i], localPose.scales[i]);
+				for (UINT32 i = 0; i < transforms.size(); ++i) {
 
-				// Vector3 trans, scale;
-				// Quaternion rot;
-				// transforms[i].decomposition(trans, rot, scale);
-				// Radian x, y, z;
-				// rot.toEulerAngles(x,y,z);
-				// std::cout << "TRANSFORM ROT ? " << i << " " << x.valueDegrees() << " " << y.valueDegrees() << " " << z.valueDegrees() << std::endl;
+					assert(transforms[i].isAffine());
 
-				assert(transforms[i].isAffine());
-
-				UINT32 offset = i * 3;
-				offset += width * frame;
-				setBoneTransform(&colors[offset], transforms[i]);
-				// std::cout << "OFFSET " << offset << " " << width << std::endl;
+					UINT32 offset = i * 3;
+					offset += width * (anim.startFrame + frame);
+					setBoneTransform(&colors[offset], transforms[i]);
+				}
 			}
 		}
+
 
 		UINT32 depth = 1;
 		auto pixelData = PixelData::create(width, height, depth, PF_RGBA32F);
@@ -239,8 +323,9 @@ namespace bs
 				assets.exampleModel = static_resource_cast<Mesh>(entry.value);
 			}
 			else if(rtti_is_of_type<AnimationClip>(entry.value.get())) {
-				assets.exampleAnimClip = static_resource_cast<AnimationClip>(entry.value);
-				std::cout << assets.exampleAnimClip->getName() << std::endl;			
+				auto clip = static_resource_cast<AnimationClip>(entry.value);
+				// std::cout << clip->getName() << std::endl;
+				assets.exampleAnimClips.push_back(clip);
 			}
 		}
 
@@ -284,19 +369,15 @@ namespace bs
 		HRenderable renderable = droneSO->addComponent<CRenderable>();
 		renderable->setMesh(assets.exampleModel);
 		renderable->setMaterial(assets.exampleMaterial);
+		HAnimation animation = droneSO->addComponent<CAnimation>();
+		auto skelCacher = droneSO->addComponent<SkelCacher>();
 
 		/************************************************************************/
 		/* 									ANIMATION	                  		*/
 		/************************************************************************/
 
-		// Add an animation component to the same scene object we added Renderable to.
-		HAnimation animation = droneSO->addComponent<CAnimation>();
-
-		// Start playing the animation clip we imported
-		animation->play(assets.exampleAnimClip);
-
   		// gCoreThread().queueCommand(std::bind(getSkeletonBoneTransforms, assets.exampleModel->getSkeleton(), assets.exampleAnimClip));
-  		HTexture texture = getSkeletonBoneTransforms(assets.exampleModel->getSkeleton(), assets.exampleAnimClip);
+  		HTexture texture = skelCacher->getSkeletonBoneTransforms(assets.exampleModel->getSkeleton(), assets.exampleAnimClips);
 		assets.exampleMaterial->setTexture("gAnimationTex", texture);
 		/************************************************************************/
 		/* 									SKYBOX                       		*/
@@ -350,36 +431,36 @@ namespace bs
 		sceneCameraSO->lookAt(Vector3(0, 1.5f, 0));
 	}
 
-	class AnimApplication : public Application {
-		Data mData[gNumInstances];
-	public:
-		AnimApplication(START_UP_DESC d) : Application(d) {
+	// class AnimApplication : public Application {
+	// 	Data mData[gNumInstances];
+	// public:
+	// 	AnimApplication(START_UP_DESC d) : Application(d) {
 
-			for (UINT32 i = 0; i < gNumInstances; ++i) {
-				mData[i].position = Vector3(i % 100, 0, i / 100);
-				UINT32 frameOffset = (i * 7) / 40;
-				mData[i].frame = (frameOffset) % 14;
-			}
-		}
+	// 		for (UINT32 i = 0; i < gNumInstances; ++i) {
+	// 			mData[i].position = Vector3(i % 100, 0, i / 100);
+	// 			UINT32 frameOffset = (i * 7) / 40;
+	// 			mData[i].frame = (frameOffset) % 14;
+	// 		}
+	// 	}
 
-		void updateInstancing(float time) {
+	// 	void updateInstancing(float time) {
 
-			for (UINT32 i = 0; i < gNumInstances; ++i) {
-				mData[i].frame += time * FPS;
-				if (mData[i].frame >= 16.f) {
-					mData[i].frame = mData[i].frame - 16.f;
-				}
-				// mData[i].frame = 15.f;
-				if (i == 0) std::cout << "FRAME ? " << mData[i].frame << std::endl;
-			}
-			gInstanceBuffer->writeData(0, sizeof(mData), mData, BWT_NORMAL);
-		}
+	// 		for (UINT32 i = 0; i < gNumInstances; ++i) {
+	// 			mData[i].frame += time * FPS;
+	// 			if (mData[i].frame >= 16.f) {
+	// 				mData[i].frame = mData[i].frame - 16.f;
+	// 			}
+	// 			// mData[i].frame = 15.f;
+	// 			if (i == 0) std::cout << "FRAME ? " << mData[i].frame << std::endl;
+	// 		}
+	// 		gInstanceBuffer->writeData(0, sizeof(mData), mData, BWT_NORMAL);
+	// 	}
 
-		void preUpdate() override {
-			Application::preUpdate();
-			gCoreThread().queueCommand(std::bind(&AnimApplication::updateInstancing, this, gTime().getFrameDelta()));
-		}
-	};
+	// 	void preUpdate() override {
+	// 		Application::preUpdate();
+	// 		gCoreThread().queueCommand(std::bind(&AnimApplication::updateInstancing, this, gTime().getFrameDelta()));
+	// 	}
+	// };
 } // namespace bs
 
 
@@ -402,15 +483,15 @@ int main()
 
 	// Initializes the application and creates a window with the specified properties
 	VideoMode videoMode(windowResWidth, windowResHeight);
-	Application::startUp<AnimApplication>(videoMode, "Example", false);
+	Application::startUp(videoMode, "Example", false);
 
 	// Registers a default set of input controls
 	ExampleFramework::setupInputConfig();
 
+	// SkelCacher skelCacher;
 	// Load a model and textures, create materials
 	Assets assets = loadAssets();
 
-	gCoreThread().queueCommand(std::bind(setupInstancing, assets));
 	// Set up the scene with an object to render and a camera
 	setUp3DScene(assets);
 	
