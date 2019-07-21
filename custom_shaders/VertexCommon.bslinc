@@ -30,7 +30,7 @@ mixin VertexCommon
 			#else
 				float3 position : POSITION0;
                 float3 position2 : POSITION1;
-                uint4 other : COLOR1;
+                float4 other : COLOR1;
 			#endif
 			
 			float2 uv0 : TEXCOORD0;
@@ -59,7 +59,7 @@ mixin VertexCommon
 			#else
 				float3 position : POSITION0;
 				float3 position2 : POSITION1;
-                uint4 other : COLOR1;
+                float4 other : COLOR1;
 			#endif
 			
 			#if SKINNED
@@ -88,6 +88,7 @@ mixin VertexCommon
 		Buffer<float4> boneMatrices;
 		
         float3x4 getBoneMatrix(uint idx, uint frame) {
+
             uint2 offset = uint2(idx * 3, frame);
             float4 row0 = gAnimationTex.Load(offset);
             row0 *= 255.0;
@@ -120,9 +121,29 @@ mixin VertexCommon
 			
 			return result;
 		}
+
         float3x4 getBlendMatrix(float4 blendWeights, uint4 blendIndices) {
             return getBlendMatrix(blendWeights, blendIndices, 0);
         }
+
+        float3x4 getMixedBlendMatrix(float4 blendWeights, uint4 blendIndices, float fractionalFrame) 
+        {        	
+        	float frame = 0;
+        	float fraction = modf(fractionalFrame, frame);
+        	uint nextFrame = frame + 1;
+        	// if (fractionalFrame > 15.0) {
+        	// 	nextFrame = 0;
+        	// }
+        	// float3x4 inputFraction = {fraction};
+        	float3x4 m1 = getBlendMatrix(blendWeights, blendIndices, frame);
+        	float3x4 m2 = getBlendMatrix(blendWeights, blendIndices, nextFrame);
+        	m1[0] = lerp(m1[0], m2[0], fraction);
+        	m1[1] = lerp(m1[1], m2[1], fraction);
+        	m1[2] = lerp(m1[2], m2[2], fraction);
+        	// m1[3] = lerp(m1[3], m2[3], fraction);
+        	return m1;
+        }
+
 		#endif
 		
 		#if LIGHTING_DATA
@@ -176,8 +197,8 @@ mixin VertexCommon
 			
 			float tangentSign;
 			#if SKINNED
-                uint frame = input.other.x;
-				result.blendMatrix = getBlendMatrix(input.blendWeights, input.blendIndices, frame);
+                float frame = input.other.x;
+				result.blendMatrix = getMixedBlendMatrix(input.blendWeights, input.blendIndices, frame);
 				float3x3 tangentToLocal = getTangentToLocal(input, tangentSign, result.blendMatrix);
 			#else
 				float3x3 tangentToLocal = getTangentToLocal(input, tangentSign);
